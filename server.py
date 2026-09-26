@@ -723,38 +723,37 @@ COMMANDS = [
 def control():
     buttons = ""
     for command, label in COMMANDS:
-        buttons += f"""
-            <button class="cmd" onclick="sendCommand('{command}', this)">
-            {label}
-        </button>
-        """
+        buttons += '<button class="cmd" onclick="sendCommand(\'%s\', this)">%s</button>' % (command, label)
 
-    return f"""
+    html = """
     <!DOCTYPE html>
     <html>
     <head>
       <title>PhoneSync Control</title>
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <style>
-        body {{ font-family:Arial,sans-serif; background:#f3f4f6; margin:0; padding:25px; color:#111827; }}
-        .box {{ max-width:1100px; margin:auto; background:white; padding:28px; border-radius:20px; box-shadow:0 10px 30px rgba(0,0,0,.08); }}
-        button.cmd {{ border:0; border-radius:10px; padding:13px 17px; background:#111827; color:white; cursor:pointer; font-size:15px; }}
-        button.cmd:hover {{ opacity:.85; }}
-        button.small {{ border:0; border-radius:8px; padding:8px 12px; background:#2563eb; color:white; cursor:pointer; }}
-        hr {{ margin:25px 0; border:0; border-top:1px solid #ddd; }}
-        .photo-box {{ min-height:250px; background:#f8fafc; border-radius:15px; padding:20px; text-align:center; }}
-        #latestPhoto {{ max-width:100%; max-height:500px; border-radius:12px; object-fit:contain; }}
-        table {{ width:100%; border-collapse:collapse; margin-top:15px; }}
-        th,td {{ padding:10px; border-bottom:1px solid #ddd; text-align:left; }}
-        th {{ background:#f1f5f9; }}
-        .links a {{ display:inline-block; margin-right:20px; margin-top:15px; color:#2563eb; text-decoration:none; }}
+        body { font-family: Arial, sans-serif; background:#f3f4f6; margin:0; padding:25px; color:#111827; }
+        .box { max-width:1100px; margin:auto; background:white; padding:28px; border-radius:20px; box-shadow:0 10px 30px rgba(0,0,0,.08); }
+        .cmd { border:0; border-radius:10px; padding:13px 17px; background:#111827; color:white; cursor:pointer; font-size:15px; margin:5px; }
+        .cmd:hover { opacity:.85; }
+        .cmd:disabled { opacity:.55; cursor:wait; }
+        .small { border:0; border-radius:8px; padding:8px 12px; background:#2563eb; color:white; cursor:pointer; }
+        hr { margin:25px 0; border:0; border-top:1px solid #ddd; }
+        .photo-box { min-height:250px; background:#f8fafc; border-radius:15px; padding:20px; text-align:center; }
+        #latestPhoto { max-width:100%; max-height:500px; border-radius:12px; object-fit:contain; }
+        table { width:100%; border-collapse:collapse; margin-top:15px; }
+        th,td { padding:10px; border-bottom:1px solid #ddd; text-align:left; }
+        th { background:#f1f5f9; }
+        .links a { display:inline-block; margin-right:20px; margin-top:15px; color:#2563eb; text-decoration:none; }
+        .status { margin-top:12px; font-weight:600; }
       </style>
     </head>
     <body>
       <div class="box">
         <h1>PhoneSync Control</h1>
         <p>Control your authorized Android device over HTTPS.</p>
-        <div>{buttons}</div>
+        <div id="commandButtons">__BUTTONS__</div>
+        <div id="commandStatus" class="status"></div>
         <hr>
         <h2>Latest Phone Photo</h2>
         <div class="photo-box">
@@ -773,130 +772,123 @@ def control():
         </div>
       </div>
       <script>
-        async function refreshPhoto() {{
-          try {{
-            const r = await fetch('/api/latest_photo?ts=' + Date.now());
+        async function sendCommand(command, button) {
+          const originalText = button.innerText;
+          const status = document.getElementById('commandStatus');
+          button.disabled = true;
+          button.innerText = 'Sending...';
+          status.textContent = '';
+          try {
+            const body = new URLSearchParams();
+            body.append('command', command);
+            const response = await fetch('/send_command_ui', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+              body: body.toString()
+            });
+            if (!response.ok) throw new Error('Server returned HTTP ' + response.status);
+            const data = await response.json();
+            if (!data.success) throw new Error(data.error || 'Command failed');
+            status.textContent = 'Command sent: ' + command;
+            if (command === 'photo_request') {
+              button.innerText = 'Photo Requested';
+              setTimeout(refreshPhoto, 3000);
+              setTimeout(refreshPhoto, 6000);
+              setTimeout(refreshPhoto, 10000);
+            }
+            if (command === 'get_files') {
+              button.innerText = 'Scanning Phone...';
+              setTimeout(refreshFiles, 3000);
+              setTimeout(refreshFiles, 7000);
+            }
+          } catch (e) {
+            console.error(e);
+            status.textContent = 'Error: ' + e.message;
+            alert('Command failed: ' + e.message);
+          } finally {
+            setTimeout(() => {
+              button.disabled = false;
+              button.innerText = originalText;
+            }, 4000);
+          }
+        }
+
+        async function refreshPhoto() {
+          try {
+            const r = await fetch('/api/latest_photo?ts=' + Date.now(), {cache:'no-store'});
+            if (!r.ok) throw new Error('Photo API HTTP ' + r.status);
             const d = await r.json();
             const img = document.getElementById('latestPhoto');
             const msg = document.getElementById('photoMessage');
             const dl = document.getElementById('photoDownload');
-            if (d.available) {{
+            if (d.available) {
               img.src = d.url + '?ts=' + Date.now();
               img.style.display = 'inline-block';
               msg.style.display = 'none';
               dl.href = d.download_url;
               dl.style.display = 'inline';
-            }} else {{
+            } else {
               img.style.display = 'none';
               dl.style.display = 'none';
               msg.textContent = 'No photo received yet. Click Take Photo.';
               msg.style.display = 'block';
-            }}
-          }} catch(e) {{ document.getElementById('photoMessage').textContent = 'Unable to load photo.'; }}
-        }}
-
-        function esc(v) {{
-          return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
-        }}
-
-        async function sendCommand(command, button) {{
-          const originalText = button.innerText;
-          button.disabled = true;
-          button.innerText = 'Sending...';
-
-          try {{
-            const body = new URLSearchParams();
-            body.append('command', command);
-
-            const response = await fetch('/send_command_ui', {{
-              method: 'POST',
-              headers: {{
-                'Content-Type': 'application/x-www-form-urlencoded'
-              }},
-              body: body.toString()
-            }});
-
-            const data = await response.json();
-
-            if (!data.success) {{
-              alert(data.error || 'Command failed');
-              return;
-            }}
-
-            console.log('Command sent:', data.command);
-
-            if (command === 'photo_request') {{
-              button.innerText = 'Photo Requested';
-              setTimeout(refreshPhoto, 3000);
-              setTimeout(refreshPhoto, 6000);
-              setTimeout(refreshPhoto, 10000);
-            }}
-
-            if (command === 'get_files') {{
-              button.innerText = 'Scanning Phone...';
-              setTimeout(refreshFiles, 3000);
-              setTimeout(refreshFiles, 7000);
-            }}
-
-          }} catch (e) {{
+            }
+          } catch (e) {
             console.error(e);
-            alert('Could not contact PhoneSync server.');
-          }} finally {{
-            setTimeout(() => {{
-              button.disabled = false;
-              button.innerText = originalText;
-            }}, 4000);
-          }}
-        }}
+            document.getElementById('photoMessage').textContent = 'Unable to load photo.';
+          }
+        }
 
-        async function refreshFiles() {{
-          try {{
-            const r = await fetch('/mobile_files?ts=' + Date.now());
+        function esc(v) {
+          return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
+        }
+
+        async function refreshFiles() {
+          try {
+            const r = await fetch('/mobile_files?ts=' + Date.now(), {cache:'no-store'});
+            if (!r.ok) throw new Error('File API HTTP ' + r.status);
             const d = await r.json();
-
-            // The server currently returns a JSON array.
-            // This also supports {"files":[...]} if the format changes later.
             const files = Array.isArray(d) ? d : (d.files || []);
-
             const c = document.getElementById('phoneFiles');
-
-            if (!files.length) {{
+            if (!files.length) {
               c.innerHTML = '<p>No phone files received yet. Click <b>Get Phone Files</b>.</p>';
               return;
-            }}
-
+            }
             let h = '<table><tr><th>Name</th><th>Path</th><th>Size</th><th>Action</th></tr>';
-
-            for (const f of files) {{
+            for (const f of files) {
               const mb = (Number(f.size || 0) / 1048576).toFixed(2);
-
-              h += '<tr>';
-              h += '<td>' + esc(f.name) + '</td>';
-              h += '<td>' + esc(f.path) + '</td>';
-              h += '<td>' + mb + ' MB</td>';
-              h += '<td><button class="small" onclick="requestFile(this)" data-path="' +
-                   encodeURIComponent(f.path) +
-                   '">Download</button></td>';
-              h += '</tr>';
-            }}
-
+              h += '<tr><td>' + esc(f.name || '') + '</td><td>' + esc(f.path || '') + '</td><td>' + mb + ' MB</td>';
+              h += '<td><button class="small" onclick="requestFile(this)" data-path="' + encodeURIComponent(f.path || '') + '">Download</button></td></tr>';
+            }
             c.innerHTML = h + '</table>';
-
-          }} catch (e) {{
+          } catch (e) {
             console.error(e);
-            document.getElementById('phoneFiles').textContent =
-              'Unable to load phone files.';
-          }}
-        }}
+            document.getElementById('phoneFiles').textContent = 'Unable to load phone files.';
+          }
+        }
 
-        async function requestFile(btn) {{
-          const path = decodeURIComponent(btn.dataset.path);
-          const body = new URLSearchParams();
-          body.append('path', path);
-          const r = await fetch('/request_mobile_file', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body:body.toString()}});
-          const d = await r.json();
-          alert(d.success ? 'File request sent to the Android phone.' : (d.error || 'Request failed.'));
-        }}
+        async function requestFile(btn) {
+          const path = decodeURIComponent(btn.dataset.path || '');
+          if (!path) return;
+          btn.disabled = true;
+          btn.innerText = 'Requesting...';
+          try {
+            const body = new URLSearchParams();
+            body.append('path', path);
+            const r = await fetch('/request_mobile_file', {
+              method:'POST',
+              headers:{'Content-Type':'application/x-www-form-urlencoded'},
+              body:body.toString()
+            });
+            const d = await r.json();
+            alert(d.success ? 'File request sent to the Android phone.' : (d.error || 'Request failed.'));
+          } catch (e) {
+            alert('File request failed: ' + e.message);
+          } finally {
+            btn.disabled = false;
+            btn.innerText = 'Download';
+          }
+        }
 
         refreshPhoto();
         refreshFiles();
@@ -906,6 +898,7 @@ def control():
     </body>
     </html>
     """
+    return html.replace('__BUTTONS__', buttons)
 
 # ============================================================
 # ERROR HANDLERS
