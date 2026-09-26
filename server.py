@@ -233,7 +233,9 @@ def register():
     data = request.get_json(silent=True) or {}
 
     device_id = str(data.get("device_id", "")).strip()
-    device_name = str(data.get("device_name", "Android Device")).strip()
+    device_name = str(
+        data.get("device_name", "Android Device")
+    ).strip()
 
     if not device_id:
         return jsonify({
@@ -241,51 +243,87 @@ def register():
             "error": "Missing device_id"
         }), 400
 
-    if not device_name:
-        device_name = "Android Device"
-
-    device_info = json.dumps(data, ensure_ascii=False)
-    timestamp = now()
+    device_info = json.dumps(data)
 
     conn = get_db()
 
-    existing = conn.execute(
-        "SELECT id FROM devices WHERE device_id = ? LIMIT 1",
-        (device_id,)
-    ).fetchone()
-
-    if existing:
-        conn.execute(
+    try:
+        # Check whether this exact Android installation
+        # has already registered.
+        existing = conn.execute(
             """
-            UPDATE devices
-            SET device_name = ?,
-                device_info = ?,
-                last_seen = ?
+            SELECT id
+            FROM devices
             WHERE device_id = ?
+            LIMIT 1
             """,
-            (device_name, device_info, timestamp, device_id)
-        )
-        action = "updated"
-    else:
-        conn.execute(
-            """
-            INSERT INTO devices
-            (device_id, device_name, device_info, created_at, last_seen)
-            VALUES (?, ?, ?, ?, ?)
-            """,
-            (device_id, device_name, device_info, timestamp, timestamp)
-        )
-        action = "registered"
+            (device_id,)
+        ).fetchone()
 
-    conn.commit()
-    conn.close()
+        if existing:
 
-    return jsonify({
-        "success": True,
-        "message": f"Device {action}",
-        "device_id": device_id,
-        "device_name": device_name
-    })
+            # Update existing device instead of creating
+            # another row.
+            conn.execute(
+                """
+                UPDATE devices
+                SET device_name = ?,
+                    device_info = ?,
+                    last_seen = ?
+                WHERE device_id = ?
+                """,
+                (
+                    device_name,
+                    device_info,
+                    now(),
+                    device_id
+                )
+            )
+
+        else:
+
+            # First registration of this device.
+            conn.execute(
+                """
+                INSERT INTO devices
+                (
+                    device_id,
+                    device_name,
+                    device_info,
+                    created_at,
+                    last_seen
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    device_id,
+                    device_name,
+                    device_info,
+                    now(),
+                    now()
+                )
+            )
+
+        conn.commit()
+
+        return jsonify({
+            "success": True,
+            "message": "Device registered",
+            "device_id": device_id,
+            "device_name": device_name
+        })
+
+    except Exception as e:
+
+        conn.rollback()
+
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
+
+    finally:
+        conn.close()
 
 
 @app.route("/login", methods=["POST"])
