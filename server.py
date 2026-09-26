@@ -492,6 +492,13 @@ def send_command_ui():
         target_device_id
     )
 
+    app.logger.info(
+        "COMMAND CREATED id=%s device=%s command=%s",
+        command_id,
+        target_device_id,
+        command
+    )
+
     return jsonify({
         "success": True,
         "id": command_id,
@@ -529,17 +536,110 @@ def get_command():
     conn.close()
 
     if row is None:
+        app.logger.info(
+            "COMMAND POLL device=%s result=EMPTY",
+            device_id
+        )
         return jsonify({
             "command": "",
             "id": 0,
             "device_id": device_id
         })
 
+    app.logger.info(
+        "COMMAND POLL device=%s result=id=%s command=%s target=%s",
+        device_id,
+        row["id"],
+        row["command"],
+        row["target_device_id"]
+    )
+
     return jsonify({
         "command": row["command"],
         "id": row["id"],
         "device_id": row["target_device_id"],
         "created_at": row["created_at"]
+    })
+
+
+# ============================================================
+# COMMAND DEBUG / DIAGNOSTICS
+# ============================================================
+
+@app.route("/api/debug/commands", methods=["GET"])
+def debug_commands():
+    device_id = request.args.get("device_id", "").strip()
+
+    conn = get_db()
+
+    if device_id:
+        rows = conn.execute(
+            """
+            SELECT id, command, target_device_id, created_at
+            FROM commands
+            WHERE target_device_id = ?
+            ORDER BY id DESC
+            LIMIT 20
+            """,
+            (device_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT id, command, target_device_id, created_at
+            FROM commands
+            ORDER BY id DESC
+            LIMIT 50
+            """
+        ).fetchall()
+
+    conn.close()
+
+    return jsonify({
+        "success": True,
+        "count": len(rows),
+        "commands": [
+            {
+                "id": row["id"],
+                "command": row["command"],
+                "target_device_id": row["target_device_id"],
+                "created_at": row["created_at"]
+            }
+            for row in rows
+        ]
+    })
+
+
+@app.route("/api/debug/device", methods=["GET"])
+def debug_device():
+    device_id = request.args.get("device_id", "").strip()
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "error": "device_id is required"
+        }), 400
+
+    row = get_device(device_id)
+
+    if row is None:
+        return jsonify({
+            "success": False,
+            "registered": False,
+            "device_id": device_id
+        }), 404
+
+    return jsonify({
+        "success": True,
+        "registered": True,
+        "device": {
+            "id": row["id"],
+            "device_id": row["device_id"],
+            "device_name": row["device_name"],
+            "device_info": row["device_info"],
+            "created_at": row["created_at"],
+            "last_seen": row["last_seen"]
+        }
     })
 
 
@@ -1183,10 +1283,12 @@ def control():
     buttons = ""
 
     for command, label in COMMANDS:
+        safe_command = html.escape(command, quote=True)
+        safe_label = html.escape(label)
         buttons += (
-            '<button class="cmd" '
-            f'onclick="sendCommand(\\\'{command}\\\', this)">'
-            f'{label}</button>'
+            f'<button class="cmd" data-command="{safe_command}" '
+            'onclick="sendCommand(this.dataset.command, this)">'
+            f'{safe_label}</button>'
         )
 
     html_page = """
@@ -1258,6 +1360,7 @@ def control():
           <a href="/files">Uploaded Files</a>
           <a href="/mobile_files_view">Phone Files Page</a>
           <a href="/api/live_matches">Live Cricket API</a>
+          <a href="/api/debug/commands">Command Debug</a>
           <a href="/">← Home</a>
         </div>
       </div>
@@ -1320,6 +1423,8 @@ def control():
             });
 
             const data = await response.json();
+
+            console.log('PhoneSync command response:', data);
 
             if (!response.ok || !data.success) {
               throw new Error(data.error || ('Server HTTP ' + response.status));
