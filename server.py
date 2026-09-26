@@ -683,6 +683,23 @@ def live_matches():
         }), 502
 
 
+
+
+@app.route("/api/latest_photo")
+def latest_photo_api():
+    image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    photos = [p for p in UPLOAD_DIR.iterdir() if p.is_file() and p.suffix.lower() in image_exts]
+    if not photos:
+        return jsonify({"success": True, "available": False})
+    photo = max(photos, key=lambda p: p.stat().st_mtime)
+    return jsonify({
+        "success": True,
+        "available": True,
+        "filename": photo.name,
+        "url": url_for("view_file", filename=photo.name, _external=True),
+        "download_url": url_for("download_file", filename=photo.name, _external=True),
+    })
+
 # ============================================================
 # CONTROL PANEL
 # ============================================================
@@ -704,12 +721,11 @@ COMMANDS = [
 @app.route("/control", methods=["GET"])
 def control():
     buttons = ""
-
     for command, label in COMMANDS:
         buttons += f"""
-        <form method="POST" action="/send_command_ui" style="display:inline-block;margin:6px;">
+        <form method="POST" action="/send_command_ui" style="display:inline-block;margin:5px;">
             <input type="hidden" name="command" value="{command}">
-            <button type="submit">{label}</button>
+            <button class="cmd" type="submit">{label}</button>
         </form>
         """
 
@@ -717,75 +733,109 @@ def control():
     <!DOCTYPE html>
     <html>
     <head>
-        <title>PhoneSync Control</title>
-        <meta name="viewport" content="width=device-width, initial-scale=1">
-        <style>
-            body {{
-                font-family: Arial, sans-serif;
-                background: #f3f4f6;
-                margin: 0;
-                padding: 20px;
-            }}
-
-            .box {{
-                max-width: 900px;
-                margin: auto;
-                background: white;
-                padding: 25px;
-                border-radius: 18px;
-                box-shadow: 0 10px 30px rgba(0,0,0,.08);
-            }}
-
-            button {{
-                border: none;
-                border-radius: 10px;
-                padding: 13px 18px;
-                background: #111827;
-                color: white;
-                cursor: pointer;
-                font-size: 15px;
-            }}
-
-            button:hover {{
-                opacity: .85;
-            }}
-
-            a {{
-                color: #2563eb;
-                text-decoration: none;
-            }}
-        </style>
+      <title>PhoneSync Control</title>
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <style>
+        body {{ font-family:Arial,sans-serif; background:#f3f4f6; margin:0; padding:25px; color:#111827; }}
+        .box {{ max-width:1100px; margin:auto; background:white; padding:28px; border-radius:20px; box-shadow:0 10px 30px rgba(0,0,0,.08); }}
+        button.cmd {{ border:0; border-radius:10px; padding:13px 17px; background:#111827; color:white; cursor:pointer; font-size:15px; }}
+        button.cmd:hover {{ opacity:.85; }}
+        button.small {{ border:0; border-radius:8px; padding:8px 12px; background:#2563eb; color:white; cursor:pointer; }}
+        hr {{ margin:25px 0; border:0; border-top:1px solid #ddd; }}
+        .photo-box {{ min-height:250px; background:#f8fafc; border-radius:15px; padding:20px; text-align:center; }}
+        #latestPhoto {{ max-width:100%; max-height:500px; border-radius:12px; object-fit:contain; }}
+        table {{ width:100%; border-collapse:collapse; margin-top:15px; }}
+        th,td {{ padding:10px; border-bottom:1px solid #ddd; text-align:left; }}
+        th {{ background:#f1f5f9; }}
+        .links a {{ display:inline-block; margin-right:20px; margin-top:15px; color:#2563eb; text-decoration:none; }}
+      </style>
     </head>
-
     <body>
-        <div class="box">
-            <h1>PhoneSync Control</h1>
-            <p>Send commands to your authorized Android device.</p>
-
-            {buttons}
-
-            <hr>
-
-            <p>
-                <a href="/files">Uploaded Files</a>
-            </p>
-
-            <p>
-                <a href="/mobile_files_view">Phone Files</a>
-            </p>
-
-            <p>
-                <a href="/api/live_matches">Live Cricket API</a>
-            </p>
-
-            <p>
-                <a href="/">← Home</a>
-            </p>
+      <div class="box">
+        <h1>PhoneSync Control</h1>
+        <p>Control your authorized Android device over HTTPS.</p>
+        <div>{buttons}</div>
+        <hr>
+        <h2>Latest Phone Photo</h2>
+        <div class="photo-box">
+          <div id="photoMessage">Checking for a photo...</div>
+          <img id="latestPhoto" style="display:none" alt="Latest phone photo">
+          <p><a id="photoDownload" style="display:none" target="_blank">Download Photo</a></p>
         </div>
+        <hr>
+        <h2>Phone Files</h2>
+        <div id="phoneFiles">Loading phone files...</div>
+        <div class="links">
+          <a href="/files">Uploaded Files</a>
+          <a href="/mobile_files_view">Phone Files Page</a>
+          <a href="/api/file_requests">File Requests API</a>
+          <a href="/api/live_matches">Live Cricket API</a>
+          <a href="/">← Home</a>
+        </div>
+      </div>
+      <script>
+        async function refreshPhoto() {{
+          try {{
+            const r = await fetch('/api/latest_photo?ts=' + Date.now());
+            const d = await r.json();
+            const img = document.getElementById('latestPhoto');
+            const msg = document.getElementById('photoMessage');
+            const dl = document.getElementById('photoDownload');
+            if (d.available) {{
+              img.src = d.url + '?ts=' + Date.now();
+              img.style.display = 'inline-block';
+              msg.style.display = 'none';
+              dl.href = d.download_url;
+              dl.style.display = 'inline';
+            }} else {{
+              img.style.display = 'none';
+              dl.style.display = 'none';
+              msg.textContent = 'No photo received yet. Click Take Photo.';
+              msg.style.display = 'block';
+            }}
+          }} catch(e) {{ document.getElementById('photoMessage').textContent = 'Unable to load photo.'; }}
+        }}
+
+        function esc(v) {{
+          return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
+        }}
+
+        async function refreshFiles() {{
+          try {{
+            const r = await fetch('/mobile_files?ts=' + Date.now());
+            const d = await r.json();
+            const c = document.getElementById('phoneFiles');
+            if (!d.files || d.files.length === 0) {{
+              c.innerHTML = '<p>No phone files received yet. Click <b>Get Phone Files</b>.</p>';
+              return;
+            }}
+            let h = '<table><tr><th>Name</th><th>Path</th><th>Size</th><th>Action</th></tr>';
+            for (const f of d.files) {{
+              const mb = (Number(f.size || 0) / 1048576).toFixed(2);
+              h += '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.path)+'</td><td>'+mb+' MB</td>';
+              h += '<td><button class="small" onclick="requestFile(this)" data-path="'+encodeURIComponent(f.path)+'">Download</button></td></tr>';
+            }}
+            c.innerHTML = h + '</table>';
+          }} catch(e) {{ document.getElementById('phoneFiles').textContent='Unable to load phone files.'; }}
+        }}
+
+        async function requestFile(btn) {{
+          const path = decodeURIComponent(btn.dataset.path);
+          const body = new URLSearchParams();
+          body.append('path', path);
+          const r = await fetch('/request_mobile_file', {{method:'POST', headers:{{'Content-Type':'application/x-www-form-urlencoded'}}, body:body.toString()}});
+          const d = await r.json();
+          alert(d.success ? 'File request sent to the Android phone.' : (d.error || 'Request failed.'));
+        }}
+
+        refreshPhoto();
+        refreshFiles();
+        setInterval(refreshPhoto, 3000);
+        setInterval(refreshFiles, 5000);
+      </script>
     </body>
     </html>
     """
-
 
 # ============================================================
 # ERROR HANDLERS
