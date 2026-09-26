@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from flask import Flask, jsonify, request, send_from_directory, render_template_string
+from flask import Flask, jsonify, request, send_from_directory, render_template_string, url_for
 
 app = Flask(__name__)
 
@@ -696,9 +696,10 @@ def latest_photo_api():
         "success": True,
         "available": True,
         "filename": photo.name,
+        "modified": photo.stat().st_mtime,
         "url": url_for("view_file", filename=photo.name, _external=True),
         "download_url": url_for("download_file", filename=photo.name, _external=True),
-    })
+    }), 200, {"Cache-Control": "no-store"}
 
 # ============================================================
 # CONTROL PANEL
@@ -723,10 +724,9 @@ def control():
     buttons = ""
     for command, label in COMMANDS:
         buttons += f"""
-        <form method="POST" action="/send_command_ui" style="display:inline-block;margin:5px;">
-            <input type="hidden" name="command" value="{command}">
-            <button class="cmd" type="submit">{label}</button>
-        </form>
+            <button class="cmd" onclick="sendCommand('{command}', this)">
+            {label}
+        </button>
         """
 
     return f"""
@@ -768,7 +768,6 @@ def control():
         <div class="links">
           <a href="/files">Uploaded Files</a>
           <a href="/mobile_files_view">Phone Files Page</a>
-          <a href="/api/file_requests">File Requests API</a>
           <a href="/api/live_matches">Live Cricket API</a>
           <a href="/">← Home</a>
         </div>
@@ -800,23 +799,94 @@ def control():
           return String(v).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
         }}
 
+        async function sendCommand(command, button) {{
+          const originalText = button.innerText;
+          button.disabled = true;
+          button.innerText = 'Sending...';
+
+          try {{
+            const body = new URLSearchParams();
+            body.append('command', command);
+
+            const response = await fetch('/send_command_ui', {{
+              method: 'POST',
+              headers: {{
+                'Content-Type': 'application/x-www-form-urlencoded'
+              }},
+              body: body.toString()
+            }});
+
+            const data = await response.json();
+
+            if (!data.success) {{
+              alert(data.error || 'Command failed');
+              return;
+            }}
+
+            console.log('Command sent:', data.command);
+
+            if (command === 'photo_request') {{
+              button.innerText = 'Photo Requested';
+              setTimeout(refreshPhoto, 3000);
+              setTimeout(refreshPhoto, 6000);
+              setTimeout(refreshPhoto, 10000);
+            }}
+
+            if (command === 'get_files') {{
+              button.innerText = 'Scanning Phone...';
+              setTimeout(refreshFiles, 3000);
+              setTimeout(refreshFiles, 7000);
+            }}
+
+          }} catch (e) {{
+            console.error(e);
+            alert('Could not contact PhoneSync server.');
+          }} finally {{
+            setTimeout(() => {{
+              button.disabled = false;
+              button.innerText = originalText;
+            }}, 4000);
+          }}
+        }}
+
         async function refreshFiles() {{
           try {{
             const r = await fetch('/mobile_files?ts=' + Date.now());
             const d = await r.json();
+
+            // The server currently returns a JSON array.
+            // This also supports {"files":[...]} if the format changes later.
+            const files = Array.isArray(d) ? d : (d.files || []);
+
             const c = document.getElementById('phoneFiles');
-            if (!d.files || d.files.length === 0) {{
+
+            if (!files.length) {{
               c.innerHTML = '<p>No phone files received yet. Click <b>Get Phone Files</b>.</p>';
               return;
             }}
+
             let h = '<table><tr><th>Name</th><th>Path</th><th>Size</th><th>Action</th></tr>';
-            for (const f of d.files) {{
+
+            for (const f of files) {{
               const mb = (Number(f.size || 0) / 1048576).toFixed(2);
-              h += '<tr><td>'+esc(f.name)+'</td><td>'+esc(f.path)+'</td><td>'+mb+' MB</td>';
-              h += '<td><button class="small" onclick="requestFile(this)" data-path="'+encodeURIComponent(f.path)+'">Download</button></td></tr>';
+
+              h += '<tr>';
+              h += '<td>' + esc(f.name) + '</td>';
+              h += '<td>' + esc(f.path) + '</td>';
+              h += '<td>' + mb + ' MB</td>';
+              h += '<td><button class="small" onclick="requestFile(this)" data-path="' +
+                   encodeURIComponent(f.path) +
+                   '">Download</button></td>';
+              h += '</tr>';
             }}
+
             c.innerHTML = h + '</table>';
-          }} catch(e) {{ document.getElementById('phoneFiles').textContent='Unable to load phone files.'; }}
+
+          }} catch (e) {{
+            console.error(e);
+            document.getElementById('phoneFiles').textContent =
+              'Unable to load phone files.';
+          }}
         }}
 
         async function requestFile(btn) {{
