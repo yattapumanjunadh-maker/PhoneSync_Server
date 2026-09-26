@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 import html
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -131,12 +132,18 @@ def save_command(command, target_device_id=None):
 def get_devices():
     conn = get_db()
     rows = conn.execute("""
-        SELECT id, device_id, device_name, device_info,
-               created_at, last_seen
-        FROM devices
-        WHERE device_id IS NOT NULL
-          AND device_id != ''
-        ORDER BY device_name COLLATE NOCASE, id
+        SELECT d.id, d.device_id, d.device_name, d.device_info,
+               d.created_at, d.last_seen
+        FROM devices d
+        INNER JOIN (
+            SELECT device_id, MAX(id) AS latest_id
+            FROM devices
+            WHERE device_id IS NOT NULL
+              AND device_id != ''
+            GROUP BY device_id
+        ) latest
+        ON latest.latest_id = d.id
+        ORDER BY d.device_name COLLATE NOCASE, d.id
     """).fetchall()
     conn.close()
     return rows
@@ -556,23 +563,60 @@ def upload():
             "error": "Empty filename"
         }), 400
 
-    filename = Path(uploaded_file.filename).name
-    destination = UPLOAD_DIR / filename
+    device_id = str(
+        request.form.get("device_id", "")
+    ).strip()
 
-    if destination.exists():
-        stem = destination.stem
-        suffix = destination.suffix
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        filename = f"{stem}_{timestamp}{suffix}"
-        destination = UPLOAD_DIR / filename
+    device_name = str(
+        request.form.get("device_name", "Android Device")
+    ).strip()
+
+    if not device_id:
+        return jsonify({
+            "success": False,
+            "error": "Missing device_id"
+        }), 400
+
+    if not device_is_known(device_id):
+        return jsonify({
+            "success": False,
+            "error": "Device is not registered"
+        }), 404
+
+    touch_device(device_id)
+
+    original_name = Path(uploaded_file.filename).name
+
+    # Keep the device ID in the stored filename so the control
+    # panel can show the latest photo for the selected device.
+    safe_device_id = re.sub(
+        r"[^A-Za-z0-9_-]+",
+        "_",
+        device_id
+    )[:80]
+
+    timestamp = datetime.now().strftime(
+        "%Y%m%d_%H%M%S_%f"
+    )
+
+    filename = (
+        f"{safe_device_id}__"
+        f"{timestamp}__"
+        f"{original_name}"
+    )
+
+    destination = UPLOAD_DIR / filename
 
     uploaded_file.save(destination)
 
     return jsonify({
         "success": True,
         "filename": filename,
+        "device_id": device_id,
+        "device_name": device_name,
         "size": destination.stat().st_size
     })
+
 
 
 # ============================================================
@@ -1023,17 +1067,55 @@ def live_matches():
 
 @app.route("/api/latest_photo")
 def latest_photo_api():
-    image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+    device_id = request.args.get(
+        "device_id",
+        ""
+    ).strip()
+
+    if not device_id:
+        return jsonify({
+            "success": True,
+            "available": False,
+            "error": "device_id is required"
+        })
+
+    if not device_is_known(device_id):
+        return jsonify({
+            "success": True,
+            "available": False,
+            "error": "Device is not registered"
+        })
+
+    image_exts = {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".webp",
+        ".gif"
+    }
+
+    safe_device_id = re.sub(
+        r"[^A-Za-z0-9_-]+",
+        "_",
+        device_id
+    )[:80]
+
+    prefix = safe_device_id + "__"
 
     photos = [
         p for p in UPLOAD_DIR.iterdir()
-        if p.is_file() and p.suffix.lower() in image_exts
+        if (
+            p.is_file()
+            and p.suffix.lower() in image_exts
+            and p.name.startswith(prefix)
+        )
     ]
 
     if not photos:
         return jsonify({
             "success": True,
-            "available": False
+            "available": False,
+            "device_id": device_id
         })
 
     photo = max(
@@ -1044,6 +1126,7 @@ def latest_photo_api():
     return jsonify({
         "success": True,
         "available": True,
+        "device_id": device_id,
         "filename": photo.name,
         "modified": photo.stat().st_mtime,
         "url": url_for(
@@ -1056,7 +1139,10 @@ def latest_photo_api():
             filename=photo.name,
             _external=True
         )
-    }), 200, {"Cache-Control": "no-store"}
+    }), 200, {
+        "Cache-Control": "no-store"
+    }
+
 
 
 # ============================================================
@@ -1086,8 +1172,12 @@ def control():
     for row in rows:
         device_id = html.escape(row["device_id"] or "", quote=True)
         device_name = html.escape(row["device_name"] or "Android Device")
+        raw_device_id = row["device_id"] or ""
+        short_device_id = raw_device_id[:8]
         device_options += (
-            f'<option value="{device_id}">{device_name}</option>'
+            f'<option value="{device_id}">'
+            f'{device_name} [{html.escape(short_device_id)}]'
+            f'</option>'
         )
 
     buttons = ""
@@ -1387,7 +1477,13 @@ def control():
             for (const device of d.devices) {
               const option = document.createElement('option');
               option.value = device.device_id;
-              option.textContent = device.device_name || 'Android Device';
+              const fullId = device.device_id || '';
+              const shortId = fullId.length > 8
+                ? fullId.substring(0, 8)
+                : fullId;
+              option.textContent =
+                (device.device_name || 'Android Device') +
+                ' [' + shortId + ']';
               select.appendChild(option);
             }
 
