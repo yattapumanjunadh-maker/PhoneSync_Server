@@ -752,6 +752,16 @@ def control():
       <div class="box">
         <h1>PhoneSync Control</h1>
         <p>Control your authorized Android device over HTTPS.</p>
+        <p style="color:#475569; font-size:14px;">
+          Select the camera before using <b>Take Photo</b>. The selected camera is sent to the Android app.
+        </p>
+        <div id="cameraControls" style="margin:15px 5px 10px 5px; padding:15px; background:#f8fafc; border-radius:12px;">
+          <label for="cameraSelect" style="font-weight:700; margin-right:10px;">Camera:</label>
+          <select id="cameraSelect" style="padding:10px 14px; border-radius:8px; border:1px solid #cbd5e1; font-size:15px;">
+            <option value="back">Back Camera</option>
+            <option value="front">Front Camera</option>
+          </select>
+        </div>
         <div id="commandButtons">__BUTTONS__</div>
         <div id="commandStatus" class="status"></div>
         <hr>
@@ -775,12 +785,20 @@ def control():
         async function sendCommand(command, button) {
           const originalText = button.innerText;
           const status = document.getElementById('commandStatus');
+
+          // Photo commands include the selected camera.
+          let commandToSend = command;
+          if (command === 'photo_request') {
+            const camera = document.getElementById('cameraSelect').value || 'back';
+            commandToSend = 'photo_request:' + camera;
+          }
+
           button.disabled = true;
           button.innerText = 'Sending...';
           status.textContent = '';
           try {
             const body = new URLSearchParams();
-            body.append('command', command);
+            body.append('command', commandToSend);
             const response = await fetch('/send_command_ui', {
               method: 'POST',
               headers: {'Content-Type': 'application/x-www-form-urlencoded'},
@@ -789,9 +807,13 @@ def control():
             if (!response.ok) throw new Error('Server returned HTTP ' + response.status);
             const data = await response.json();
             if (!data.success) throw new Error(data.error || 'Command failed');
-            status.textContent = 'Command sent: ' + command;
+            status.textContent = 'Command sent: ' + commandToSend;
             if (command === 'photo_request') {
-              button.innerText = 'Photo Requested';
+              const cameraLabel =
+                document.getElementById('cameraSelect').value === 'front'
+                  ? 'Front Camera'
+                  : 'Back Camera';
+              button.innerText = 'Photo Requested (' + cameraLabel + ')';
               setTimeout(refreshPhoto, 3000);
               setTimeout(refreshPhoto, 6000);
               setTimeout(refreshPhoto, 10000);
